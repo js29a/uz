@@ -1,6 +1,6 @@
 <script setup lang="ts">
 
-import { ref, defineProps, withDefaults, defineEmits, getCurrentInstance, defineExpose } from 'vue'
+import { ref, computed, defineProps, withDefaults, defineEmits, getCurrentInstance, defineExpose, watch, nextTick } from 'vue'
 
 import $ from 'jQuery'
 
@@ -27,6 +27,10 @@ const emit = defineEmits<{
   (e: 'drop', evt: any, files: any[]): void
   (e: 'upload:progress', vec: any[]): void
   (e: 'upload:done', vec: any[]): void
+  (e: 'update:canReset', flag: boolean): void
+  (e: 'update:canPick', flag: boolean): void
+  (e: 'update:canStart', flag: boolean): void
+  (e: 'update:canAbort', flag: boolean): void
 }>()
 
 const inst = getCurrentInstance()
@@ -130,12 +134,15 @@ const start_cb = (): void => {
 }
 
 const reset_cb = (): void => {
+  if(mode.value == Mode.m_idle)
+    return
+
   mode.value = Mode.m_idle
   files = []
 }
 
 const pick_cb = (): void => {
-  if(mode.value != Mode.m_idle && Mode.value != Mode.m_wait)
+  if(mode.value != Mode.m_idle && mode.value != Mode.m_wait)
     return
 
   const inp = document.createElement('input')
@@ -167,7 +174,7 @@ const start_job = () => {
     total: files[cur_file].size
   })
 
-  queue.value = queue.value.filter(queue.value, (file) => {
+  queue.value = queue.value.filter((file) => {
     return file !== cur
   })
 
@@ -183,7 +190,7 @@ const start_job = () => {
       const xhr = new window.XMLHttpRequest()
 
       xhr.upload.addEventListener('progress', (evt): void => {
-        queue.value.forEach(current.value, (item) => {
+        current.value.forEach((item) => {
           if(item.file === cur) {
             item.current = evt.loaded
             item.total = evt.total
@@ -195,7 +202,7 @@ const start_job = () => {
     }
   })
     .then((res: any) => {
-      current.value = queue.value.filter(current.value, (item) => {
+      current.value = current.value.filter((item) => {
         return item.file !== cur
       })
 
@@ -222,12 +229,11 @@ const start_job = () => {
 
         files = [] // XXX can drop w/o reset
 
-        if(errors.value.length) {
+        if(errors.value.length)
           if(props.keepGoing || props.keepGoing === '')
             mode.value = Mode.m_with_errors
           else
             mode.value = Mode.m_error
-        }
         else
           if(props.autoReset || props.autoReset === '')
             mode.value = Mode.m_idle
@@ -242,7 +248,7 @@ const start_job = () => {
     })
     .catch((err: any) => {
       if(props.keepGoing || props.keepGoing === '') {
-        current.value = current.value.filter(current.value, (item) => {
+        current.value = current.value.filter((item) => {
           return item.file !== cur
         })
 
@@ -268,11 +274,61 @@ const start_job = () => {
     })
 }
 
+const can_pick = computed({
+  get: () => {
+    return mode.value == Mode.m_idle || mode.value == Mode.m_wait
+  },
+  set: () => {
+  }
+})
+
+const can_start = computed({
+  get: () => {
+    return mode.value == Mode.m_wait
+  },
+  set: () => {
+  }
+})
+
+const can_abort = computed({
+  get: () => {
+    return mode.value == Mode.m_uploading
+  },
+  set: () => {
+  }
+})
+
+const can_reset = computed({
+  get: () => {
+    return mode.value != Mode.m_idle
+  },
+  set: () => {
+  }
+})
+
+const update_can = (state: Mode): void => {
+  emit('update:canPick', can_pick.value)
+  emit('update:canStart', can_start.value)
+  emit('update:canAbort', can_abort.value)
+  emit('update:canReset', can_reset.value)
+}
+
+watch(() => { return mode.value }, (t: Mode, f: Mode) => { update_can(t) } )
+
+nextTick(() => {
+  update_can(mode.value)
+})
+
 defineExpose({
   reset: reset_cb,
   start: start_cb,
   pick: pick_cb,
-  abort: abort_cb
+  abort: abort_cb,
+
+  can_pick,
+  can_start,
+  can_abort,
+  can_reset
 })
 
 </script>

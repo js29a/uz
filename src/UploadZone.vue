@@ -21,32 +21,49 @@ const props = withDefaults(defineProps<Props>(), {
   tag: 'div'
 })
 
+enum State {
+  s_idle = 'idle',
+  s_hover = 'hover',
+  s_wait = 'wait',
+  s_uploading = 'uploading',
+  s_done = 'done',
+  s_error = 'error',
+  s_with_errors = 'with_errors',
+  s_aborted = 'aborted'
+}
+
 const emit = defineEmits<{
-  (e: 'drag:over', evt: any): void
-  (e: 'drag:out', evt: any): void
-  (e: 'drop', evt: any, files: any[]): void
-  (e: 'upload:progress', vec: any[]): void
-  (e: 'upload:done', vec: any[]): void
   (e: 'update:canReset', flag: boolean): void
   (e: 'update:canPick', flag: boolean): void
   (e: 'update:canStart', flag: boolean): void
   (e: 'update:canAbort', flag: boolean): void
+  (e: 'update:state', new_state: State): void
+
+  (e: 'files:add', evt: any, files: any[]): void
+  (e: 'files:clear'): void
+
+  (e: 'drag:over', evt: any): void
+  (e: 'drag:out', evt: any): void
+
+  (e: 'upload:start', queue: any[]): void
+  (e: 'upload:progress', progress: any[], current: any[], queue: any[]): void
+
+  (e: 'upload:done', result: any[], errors: any[]): void
+  (e: 'upload:error', error: any): void
+  (e: 'upload:aborted', progress: any[], current: any[], queue: any[], errors: any[]): void
+
+  (e: 'debug', ... args: any[]): void
 }>()
+
+const do_emit = (code: string, ... args: any[]) => {
+  // @ts-ignore
+  emit.apply(null, [code].concat(args))
+  emit.apply(null, ['debug', code, args])
+}
 
 const inst = getCurrentInstance()
 
-enum Mode {
-  m_idle = 'idle',
-  m_hover = 'hover',
-  m_wait = 'wait',
-  m_uploading = 'uploading',
-  m_done = 'done',
-  m_error = 'error',
-  m_with_errors = 'with_errors', // XXX av when keep-going set
-  m_aborted = 'aborted'
-}
-
-const mode = ref('idle' as Mode)
+const state = ref(State.s_idle)
 
 const queue = ref([] as any[])
 const progress = ref({} as any)
@@ -75,7 +92,7 @@ const extract_files = (evt: any): any[] => {
     if(evt.dataTransfer)
       for(const file of evt.dataTransfer.files)
         files.push(file)
-    else // XXX elem click
+    else
       for(const file of evt.target.files)
         files.push(file)
 
@@ -83,12 +100,12 @@ const extract_files = (evt: any): any[] => {
 }
 
 const drop = (evt: any): void => {
-  if(mode.value != Mode.m_hover && mode.value != Mode.m_idle && mode.value != Mode.m_wait)
+  if(state.value != State.s_hover && state.value != State.s_idle && state.value != State.s_wait)
     return
 
-  mode.value = Mode.m_wait
+  state.value = State.s_wait
   files = files.concat(extract_files(evt))
-  emit('drop', evt, files)
+  do_emit('files:add', [evt, files])
   queue.value = files
 
   if(props.autoStart || props.autoStart === '')
@@ -96,29 +113,32 @@ const drop = (evt: any): void => {
 }
 
 const drag_over = (evt: any): void => {
-  if(mode.value != Mode.m_idle)
+  if(state.value != State.s_idle)
     return
 
-  mode.value = Mode.m_hover
-  emit('drag:over', evt)
+  state.value = State.s_hover
+
+  do_emit('drag:over', evt)
 }
 
 const drag_out = (evt: any): void => {
-  if(mode.value != Mode.m_hover)
+  if(state.value != State.s_hover)
     return
 
-  mode.value = Mode.m_idle
-  //console.log('out', evt)
-  emit('drag:out', evt)
+  state.value = State.s_idle
+
+  do_emit('drag:out', evt)
 }
 
 const start_cb = (): void => {
-  if(mode.value != Mode.m_wait)
+  if(state.value != State.s_wait)
     return
+
+  do_emit('upload:start', [files])
 
   aborted = false
 
-  mode.value = Mode.m_uploading
+  state.value = State.s_uploading
 
   results.value = []
   progress.value = []
@@ -134,15 +154,16 @@ const start_cb = (): void => {
 }
 
 const reset_cb = (): void => {
-  if(mode.value == Mode.m_idle)
+  if(state.value == State.s_idle)
     return
 
-  mode.value = Mode.m_idle
+  state.value = State.s_idle
   files = []
+  do_emit('files:clear', [])
 }
 
 const pick_cb = (): void => {
-  if(mode.value != Mode.m_idle && mode.value != Mode.m_wait)
+  if(state.value != State.s_idle && state.value != State.s_wait)
     return
 
   const inp = document.createElement('input')
@@ -151,11 +172,12 @@ const pick_cb = (): void => {
   inp.addEventListener('input', (evt: any): void => {
     drop(evt)
   })
+
   inp.click()
 }
 
 const abort_cb = (): void => {
-  if(mode.value != Mode.m_uploading)
+  if(state.value != State.s_uploading)
     return
 
   aborted = true
@@ -178,6 +200,8 @@ const start_job = () => {
     return file !== cur
   })
 
+  do_emit('upload:progress', progress.value, current.value, queue.value)
+
   cur_file += 1
 
   $.ajax({
@@ -196,6 +220,7 @@ const start_job = () => {
             item.total = evt.total
           }
         })
+        do_emit('upload:progress', progress.value, current.value, queue.value)
       })
 
       return xhr
@@ -206,39 +231,46 @@ const start_job = () => {
         return item.file !== cur
       })
 
+      do_emit('upload:progress', progress.value, current.value, queue.value)
+
       progress.value.push(res)
       results.value.push(res)
-
-      emit('upload:progress', progress.value)
 
       cur_jobs -= 1
 
       if(aborted) {
         if(props.autoReset || props.autoReset === '') {
-          mode.value = Mode.m_idle
-          files = [] // # XXX can drop w/o reset
+          state.value = State.s_idle
+          files = []
+          do_emit('files:clear', [])
         }
         else
-          mode.value = Mode.m_aborted
+          if(state.value != State.s_aborted) {
+            state.value = State.s_aborted
+            do_emit('upload:aborted', progress.value, current.value, queue.value, errors.value)
+          }
 
         return
       }
 
       if(cur_file == files.length && !cur_jobs) {
-        emit('upload:done', results.value)
-
-        files = [] // XXX can drop w/o reset
+        files = []
+        do_emit('files:clear', [])
 
         if(errors.value.length)
-          if(props.keepGoing || props.keepGoing === '')
-            mode.value = Mode.m_with_errors
+          if(props.keepGoing || props.keepGoing === '') {
+            state.value = State.s_with_errors
+            do_emit('upload:done', results.value, errors.value)
+          }
           else
-            mode.value = Mode.m_error
+            state.value = State.s_error
         else
           if(props.autoReset || props.autoReset === '')
-            mode.value = Mode.m_idle
-          else
-            mode.value = Mode.m_done
+            state.value = State.s_idle
+          else {
+            state.value = State.s_done
+            do_emit('upload:done', results.value, errors.value)
+          }
 
         return
       }
@@ -257,10 +289,13 @@ const start_job = () => {
           file: cur
         })
 
+        do_emit('upload:error', err)
+
         cur_jobs -= 1
 
         if(cur_file == files.length && !cur_jobs) {
-          mode.value = Mode.m_with_errors
+          state.value = State.s_with_errors
+          do_emit('upload:done', results.value, errors.value)
           return
         }
 
@@ -268,15 +303,16 @@ const start_job = () => {
           start_job()
       }
       else {
-        mode.value = Mode.m_error
+        state.value = State.s_error
         error.value = err
+        do_emit('upload:error', err)
       }
     })
 }
 
 const can_pick = computed({
   get: () => {
-    return mode.value == Mode.m_idle || mode.value == Mode.m_wait
+    return state.value == State.s_idle || state.value == State.s_wait
   },
   set: () => {
   }
@@ -284,7 +320,7 @@ const can_pick = computed({
 
 const can_start = computed({
   get: () => {
-    return mode.value == Mode.m_wait
+    return state.value == State.s_wait
   },
   set: () => {
   }
@@ -292,7 +328,7 @@ const can_start = computed({
 
 const can_abort = computed({
   get: () => {
-    return mode.value == Mode.m_uploading
+    return state.value == State.s_uploading
   },
   set: () => {
   }
@@ -300,24 +336,24 @@ const can_abort = computed({
 
 const can_reset = computed({
   get: () => {
-    return mode.value != Mode.m_idle
+    return state.value != State.s_idle
   },
   set: () => {
   }
 })
 
-const update_can = (state: Mode): void => {
-  emit('update:canPick', can_pick.value)
-  emit('update:canStart', can_start.value)
-  emit('update:canAbort', can_abort.value)
-  emit('update:canReset', can_reset.value)
+const on_state_changed = (): void => {
+  do_emit('update:canPick', can_pick.value)
+  do_emit('update:canStart', can_start.value)
+  do_emit('update:canAbort', can_abort.value)
+  do_emit('update:canReset', can_reset.value)
+
+  do_emit('update:state', state.value)
 }
 
-watch(() => { return mode.value }, (t: Mode, f: Mode) => { update_can(t) } )
+watch(() => { return state.value }, (t: State, f: State) => { nextTick(on_state_changed) } )
 
-nextTick(() => {
-  update_can(mode.value)
-})
+nextTick(on_state_changed)
 
 defineExpose({
   reset: reset_cb,
@@ -335,20 +371,20 @@ defineExpose({
 
 <template bindings="">
   <component is='props.tag' @drop.prevent='drop' @dragover.prevent='drag_over' @dragleave.prevent='drag_out'>
-    <slot name='idle' v-if='mode == "idle"' v-bind:pick='pick_cb' />
-    <slot name='hover' v-if='mode == "hover"' />
-    <slot name='wait' v-if='mode == "wait"' v-bind:start='start_cb'
+    <slot name='idle' v-if='state == "idle"' v-bind:pick='pick_cb' />
+    <slot name='hover' v-if='state == "hover"' />
+    <slot name='wait' v-if='state == "wait"' v-bind:start='start_cb'
           v-bind:queue='queue' v-bind:reset='reset_cb' />
-    <slot name='uploading' v-if='mode == "uploading"'
+    <slot name='uploading' v-if='state == "uploading"'
           v-bind:progress='progress'
           v-bind:current='current'
           v-bind:queue='queue'
           v-bind:errors='errors'
           v-bind:abort='abort_cb' />
-    <slot name='done' v-if='mode == "done"' v-bind:result='results' v-bind:reset='reset_cb' />
-    <slot name='error' v-if='mode == "error"' v-bind:error='error' v-bind:reset='reset_cb' />
-    <slot name='aborted' v-if='mode == "aborted"' v-bind:result='results' v-bind:reset='reset_cb' />
-    <slot name='with-errors' v-if='mode == "with_errors"' v-bind:result='results' v-bind:errors='errors'
+    <slot name='done' v-if='state == "done"' v-bind:result='results' v-bind:reset='reset_cb' />
+    <slot name='error' v-if='state == "error"' v-bind:error='error' v-bind:reset='reset_cb' />
+    <slot name='aborted' v-if='state == "aborted"' v-bind:result='results' v-bind:reset='reset_cb' />
+    <slot name='with-errors' v-if='state == "with_errors"' v-bind:result='results' v-bind:errors='errors'
           v-bind:reset='reset_cb' />
   </component>
 </template>

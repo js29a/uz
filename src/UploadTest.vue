@@ -32,6 +32,10 @@ const abort = (): void => {
   (inst as any).refs.uploader.abort()
 }
 
+const log = (code: string, args: any[]) => {
+  console.log.apply(null, ['>', code].concat(args))
+}
+
 </script>
 
 <template>
@@ -58,7 +62,8 @@ const abort = (): void => {
                @update:canPick='(flag: boolean) => can_pick = flag'
                @update:canStart='(flag: boolean) => can_start = flag'
                @update:canAbort='(flag: boolean) => can_abort = flag'
-               @update:canReset='(flag: boolean) => can_reset = flag'>
+               @update:canReset='(flag: boolean) => can_reset = flag'
+               @debug='(code: string, args: any[]) => log(code, args)'>
       <template #idle='{ pick }'>
         <div class='idle'>
           idle

@@ -97,8 +97,6 @@ const log = (code: string, args: any[]) => {
           <button @click='abort()'>abort</button>
           <br />
           {{ progress.length }} / {{ current.length }} / {{ queue.length }}
-          <br />
-          <button @click='abort()'>abort</button>
           <b>errors:</b> <span v-for='error in errors'>{{ error.file.name }}</span>
           <b>progress:</b> <div v-for='item in progress'>{{ item }}</div>
           <b>current:</b>

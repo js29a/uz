@@ -2,7 +2,7 @@
 
 import { ref, computed, defineProps, withDefaults, defineEmits, getCurrentInstance, defineExpose, watch, nextTick } from 'vue'
 
-import $ from 'jQuery'
+import axios from 'axios'
 
 interface Props {
   target: string
@@ -55,6 +55,8 @@ const emit = defineEmits<{
   (e: 'debug', ... args: any[]): void
 }>()
 
+let abort_controller: any = null
+
 const do_emit = (code: string, ... args: any[]) => {
   // @ts-ignore
   emit.apply(null, [code].concat(args))
@@ -92,7 +94,7 @@ const extract_files = (evt: any): any[] => {
     if(evt.dataTransfer)
       for(const file of evt.dataTransfer.files)
         files.push(file)
-    else
+    else // XXX elem click
       for(const file of evt.target.files)
         files.push(file)
 
@@ -133,6 +135,12 @@ const drag_out = (evt: any): void => {
 const start_cb = (): void => {
   if(state.value != State.s_wait)
     return
+
+  try {
+    abort_controller = new AbortController()
+  }
+  catch {
+  }
 
   do_emit('upload:start', [files])
 
@@ -204,44 +212,45 @@ const start_job = () => {
 
   cur_file += 1
 
-  $.ajax({
+  const options = {
+    method: 'post',
     url: props.target,
-    type: 'POST',
     data: fd,
-    contentType: false,
-    processData: false,
-    xhr: (): any => {
-      const xhr = new window.XMLHttpRequest()
+    onUploadProgress: (evt: any) => {
+      if(aborted && abort_controller)
+        abort_controller.abort()
 
-      xhr.upload.addEventListener('progress', (evt): void => {
-        current.value.forEach((item) => {
-          if(item.file === cur) {
-            item.current = evt.loaded
-            item.total = evt.total
-          }
-        })
-        do_emit('upload:progress', progress.value, current.value, queue.value)
+      current.value.forEach((item) => {
+        if(item.file === cur) {
+          item.current = evt.loaded
+          item.total = evt.total
+        }
       })
 
-      return xhr
+      do_emit('upload:progress', progress.value, current.value, queue.value)
     }
-  })
-    .then((res: any) => {
+  } as any
+
+  if(abort_controller)
+    options.signal = abort_controller.signal
+
+  axios(options)
+    .then((res) => {
       current.value = current.value.filter((item) => {
         return item.file !== cur
       })
 
       do_emit('upload:progress', progress.value, current.value, queue.value)
 
-      progress.value.push(res)
-      results.value.push(res)
+      progress.value.push(res.data)
+      results.value.push(res.data)
 
       cur_jobs -= 1
 
       if(aborted) {
         if(props.autoReset || props.autoReset === '') {
           state.value = State.s_idle
-          files = []
+          files = [] // # XXX can drop w/o reset
           do_emit('files:clear', [])
         }
         else
@@ -254,7 +263,7 @@ const start_job = () => {
       }
 
       if(cur_file == files.length && !cur_jobs) {
-        files = []
+        files = [] // XXX can drop w/o reset
         do_emit('files:clear', [])
 
         if(errors.value.length)
@@ -278,18 +287,23 @@ const start_job = () => {
       while(cur_jobs < props.maxJobs && cur_file < files.length)
         start_job()
     })
-    .catch((err: any) => {
+    .catch((err) => {
+      if(aborted && err.name == 'CanceledError') {
+        state.value = State.s_aborted
+        return err
+      }
+
       if(props.keepGoing || props.keepGoing === '') {
         current.value = current.value.filter((item) => {
           return item.file !== cur
         })
 
         errors.value.push({
-          error: err,
+          error: err.response,
           file: cur
         })
 
-        do_emit('upload:error', err)
+        do_emit('upload:error', err.response)
 
         cur_jobs -= 1
 
@@ -304,8 +318,8 @@ const start_job = () => {
       }
       else {
         state.value = State.s_error
-        error.value = err
-        do_emit('upload:error', err)
+        error.value = err.response
+        do_emit('upload:error', err.response)
       }
     })
 }
